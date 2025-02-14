@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace GeoIp2\Test\Database;
 
 use GeoIp2\Database\Reader;
+use GeoIp2\Exception\AddressNotFoundException;
 use PHPUnit\Framework\TestCase;
 
 /**
@@ -14,7 +15,10 @@ use PHPUnit\Framework\TestCase;
  */
 class ReaderTest extends TestCase
 {
-    public function databaseTypes(): array
+    /**
+     * @return array<list<string>>
+     */
+    public static function databaseTypes(): array
     {
         return [['City', 'city'], ['Country', 'country']];
     }
@@ -76,7 +80,7 @@ class ReaderTest extends TestCase
 
     public function testUnknownAddress(): void
     {
-        $this->expectException(\GeoIp2\Exception\AddressNotFoundException::class);
+        $this->expectException(AddressNotFoundException::class);
         $this->expectExceptionMessage('The address 10.10.10.10 is not in the database.');
 
         $reader = new Reader('maxmind-db/test-data/GeoIP2-City-Test.mmdb');
@@ -171,9 +175,31 @@ class ReaderTest extends TestCase
         $ipAddress = '1.0.1.1';
 
         $record = $reader->connectionType($ipAddress);
-        $this->assertSame('Cable/DSL', $record->connectionType);
+        $this->assertSame('Cellular', $record->connectionType);
         $this->assertSame($ipAddress, $record->ipAddress);
         $this->assertSame('1.0.1.0/24', $record->network);
+        $reader->close();
+    }
+
+    public function testCity(): void
+    {
+        $reader = new Reader('maxmind-db/test-data/GeoIP2-City-Test.mmdb');
+
+        // This IP has is_anycast
+        $record = $reader->city('214.1.1.0');
+        $this->assertTrue($record->traits->isAnycast);
+
+        $reader->close();
+    }
+
+    public function testCountry(): void
+    {
+        $reader = new Reader('maxmind-db/test-data/GeoIP2-Country-Test.mmdb');
+
+        // This IP has is_anycast
+        $record = $reader->country('214.1.1.0');
+        $this->assertTrue($record->traits->isAnycast);
+
         $reader->close();
     }
 
@@ -213,6 +239,10 @@ class ReaderTest extends TestCase
         $record = $reader->enterprise('149.101.100.0');
         $this->assertSame('310', $record->traits->mobileCountryCode);
         $this->assertSame('004', $record->traits->mobileNetworkCode);
+
+        // This IP has is_anycast
+        $record = $reader->enterprise('214.1.1.0');
+        $this->assertTrue($record->traits->isAnycast);
 
         $reader->close();
     }

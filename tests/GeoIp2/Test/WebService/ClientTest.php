@@ -5,7 +5,14 @@ declare(strict_types=1);
 namespace GeoIp2\Test\WebService;
 
 use Composer\CaBundle\CaBundle;
+use GeoIp2\Exception\AddressNotFoundException;
+use GeoIp2\Exception\AuthenticationException;
+use GeoIp2\Exception\GeoIp2Exception;
+use GeoIp2\Exception\HttpException;
+use GeoIp2\Exception\OutOfQueriesException;
+use GeoIp2\WebService\Client;
 use MaxMind\WebService\Client as WsClient;
+use MaxMind\WebService\Http\Request;
 use PHPUnit\Framework\TestCase;
 
 /**
@@ -32,10 +39,14 @@ class ClientTest extends TestCase
         'maxmind' => ['queries_remaining' => 11],
         'traits' => [
             'ip_address' => '1.2.3.4',
+            'is_anycast' => true,
             'network' => '1.2.3.0/24',
         ],
     ];
 
+    /**
+     * @return list<array<string, mixed>>
+     */
     private function getResponse(string $service, string $ipAddress): array
     {
         if ($service === 'Insights') {
@@ -67,7 +78,7 @@ class ClientTest extends TestCase
             ),
             '1.2.3.5' => $this->response('country', 200),
             '2.2.3.5' => $this->response('country', 200, 'bad body'),
-            '1.2.3.6' => $this->response(
+            '1.2.3' => $this->response(
                 'error',
                 400,
                 [
@@ -236,6 +247,11 @@ class ClientTest extends TestCase
             'registered_country is_in_european_union is false'
         );
 
+        $this->assertTrue(
+            $country->traits->isAnycast,
+            'is_anycast'
+        );
+
         $this->assertSame(
             '1.2.3.0/24',
             $country->traits->network,
@@ -253,6 +269,11 @@ class ClientTest extends TestCase
             42,
             $record->continent->geonameId,
             'continent geoname_id is 42'
+        );
+
+        $this->assertTrue(
+            $record->traits->isAnycast,
+            'is_anycast'
         );
 
         $this->assertSame(
@@ -300,7 +321,7 @@ class ClientTest extends TestCase
 
     public function testNoBodyException(): void
     {
-        $this->expectException(\GeoIp2\Exception\GeoIp2Exception::class);
+        $this->expectException(GeoIp2Exception::class);
         $this->expectExceptionMessage('Received a 200 response for GeoIP2 Country but did not receive a HTTP body.');
 
         $this->makeRequest('Country', '1.2.3.5');
@@ -308,7 +329,7 @@ class ClientTest extends TestCase
 
     public function testBadBodyException(): void
     {
-        $this->expectException(\GeoIp2\Exception\GeoIp2Exception::class);
+        $this->expectException(GeoIp2Exception::class);
         $this->expectExceptionMessage('Received a 200 response for GeoIP2 Country but could not decode the response as JSON:');
 
         $this->makeRequest('Country', '2.2.3.5');
@@ -316,16 +337,15 @@ class ClientTest extends TestCase
 
     public function testInvalidIPException(): void
     {
-        $this->expectException(\GeoIp2\Exception\InvalidRequestException::class);
-        $this->expectExceptionCode(400);
-        $this->expectExceptionMessage('The value "1.2.3" is not a valid ip address');
+        $this->expectException(\InvalidArgumentException::class);
+        $this->expectExceptionMessage('The value "1.2.3" is not a valid IP address');
 
-        $this->makeRequest('Country', '1.2.3.6');
+        $this->makeRequest('Country', '1.2.3', callsToRequest: 0);
     }
 
     public function testNoErrorBodyIPException(): void
     {
-        $this->expectException(\GeoIp2\Exception\HttpException::class);
+        $this->expectException(HttpException::class);
         $this->expectExceptionCode(400);
         $this->expectExceptionMessage('with no body');
 
@@ -334,7 +354,7 @@ class ClientTest extends TestCase
 
     public function testWeirdErrorBodyIPException(): void
     {
-        $this->expectException(\GeoIp2\Exception\GeoIp2Exception::class);
+        $this->expectException(GeoIp2Exception::class);
         $this->expectExceptionMessage('Error response contains JSON but it does not specify code or error keys: {"weird":42}');
 
         $this->makeRequest('Country', '1.2.3.8');
@@ -342,7 +362,7 @@ class ClientTest extends TestCase
 
     public function testInvalidErrorBodyIPException(): void
     {
-        $this->expectException(\GeoIp2\Exception\HttpException::class);
+        $this->expectException(HttpException::class);
         $this->expectExceptionCode(400);
         $this->expectExceptionMessage('Received a 400 error for GeoIP2 Country but could not decode the response as JSON: Syntax error. Body: { invalid: }');
 
@@ -351,7 +371,7 @@ class ClientTest extends TestCase
 
     public function test500PException(): void
     {
-        $this->expectException(\GeoIp2\Exception\HttpException::class);
+        $this->expectException(HttpException::class);
         $this->expectExceptionCode(500);
         $this->expectExceptionMessage('Received a server error (500)');
 
@@ -360,7 +380,7 @@ class ClientTest extends TestCase
 
     public function test3xxException(): void
     {
-        $this->expectException(\GeoIp2\Exception\HttpException::class);
+        $this->expectException(HttpException::class);
         $this->expectExceptionCode(300);
         $this->expectExceptionMessage('Received an unexpected HTTP status (300) for GeoIP2 Country');
 
@@ -369,7 +389,7 @@ class ClientTest extends TestCase
 
     public function test406Exception(): void
     {
-        $this->expectException(\GeoIp2\Exception\HttpException::class);
+        $this->expectException(HttpException::class);
         $this->expectExceptionCode(406);
         $this->expectExceptionMessage('Received a 406 error for GeoIP2 Country with the following body: Cannot satisfy your Accept-Charset requirements');
 
@@ -378,7 +398,7 @@ class ClientTest extends TestCase
 
     public function testAddressNotFoundException(): void
     {
-        $this->expectException(\GeoIp2\Exception\AddressNotFoundException::class);
+        $this->expectException(AddressNotFoundException::class);
         $this->expectExceptionMessage('The address "1.2.3.13" is not in our database.');
 
         $this->makeRequest('Country', '1.2.3.13');
@@ -386,7 +406,7 @@ class ClientTest extends TestCase
 
     public function testAddressReservedException(): void
     {
-        $this->expectException(\GeoIp2\Exception\AddressNotFoundException::class);
+        $this->expectException(AddressNotFoundException::class);
         $this->expectExceptionMessage('The address "1.2.3.14" is a private address.');
 
         $this->makeRequest('Country', '1.2.3.14');
@@ -394,7 +414,7 @@ class ClientTest extends TestCase
 
     public function testAuthorizationException(): void
     {
-        $this->expectException(\GeoIp2\Exception\AuthenticationException::class);
+        $this->expectException(AuthenticationException::class);
         $this->expectExceptionMessage('A user ID and license key are required to use this service');
 
         $this->makeRequest('Country', '1.2.3.15');
@@ -402,7 +422,7 @@ class ClientTest extends TestCase
 
     public function testMissingLicenseKeyException(): void
     {
-        $this->expectException(\GeoIp2\Exception\AuthenticationException::class);
+        $this->expectException(AuthenticationException::class);
         $this->expectExceptionMessage('A license key is required to use this service');
 
         $this->makeRequest('Country', '1.2.3.16');
@@ -410,7 +430,7 @@ class ClientTest extends TestCase
 
     public function testMissingUserIdException(): void
     {
-        $this->expectException(\GeoIp2\Exception\AuthenticationException::class);
+        $this->expectException(AuthenticationException::class);
         $this->expectExceptionMessage('A user ID is required to use this service');
 
         $this->makeRequest('Country', '1.2.3.17');
@@ -418,7 +438,7 @@ class ClientTest extends TestCase
 
     public function testMissingAccountIdException(): void
     {
-        $this->expectException(\GeoIp2\Exception\AuthenticationException::class);
+        $this->expectException(AuthenticationException::class);
         $this->expectExceptionMessage('A account ID is required to use this service');
 
         $this->makeRequest('Country', '1.2.3.19');
@@ -426,7 +446,7 @@ class ClientTest extends TestCase
 
     public function testOutOfQueriesException(): void
     {
-        $this->expectException(\GeoIp2\Exception\OutOfQueriesException::class);
+        $this->expectException(OutOfQueriesException::class);
         $this->expectExceptionMessage('The license key you have provided is out of queries.');
 
         $this->makeRequest('Country', '1.2.3.18');
@@ -472,9 +492,13 @@ class ClientTest extends TestCase
             $headers['Content-Length'] = \strlen($body);
         }
 
-        return [$status, $headers,  $body];
+        return [$status, $headers, $body];
     }
 
+    /**
+     * @param list<string>         $locales
+     * @param array<string, mixed> $options
+     */
     private function makeRequest(
         string $service,
         string $ipAddress,
@@ -489,7 +513,7 @@ class ClientTest extends TestCase
             = $this->getResponse($service, $ipAddress);
 
         $stub = $this->createMock(
-            \MaxMind\WebService\Http\Request::class
+            Request::class
         );
         $contentType = isset($headers['Content-Type'])
             ? $headers['Content-Type']
@@ -498,7 +522,7 @@ class ClientTest extends TestCase
             ->method('get')
             ->willReturn([$statusCode, $contentType, $responseBody]);
         $factory = $this->getMockBuilder(
-            'MaxMind\\WebService\\Http\\RequestFactory'
+            'MaxMind\WebService\Http\RequestFactory'
         )->getMock();
         $host = isset($options['host']) ? $options['host'] : 'geoip.maxmind.com';
         $url = 'https://' . $host . '/geoip/v2.1/' . strtolower($service)
@@ -524,7 +548,7 @@ class ClientTest extends TestCase
                 $this->equalTo(
                     [
                         'headers' => $headers,
-                        'userAgent' => 'GeoIP2-API/' . \GeoIp2\WebService\Client::VERSION
+                        'userAgent' => 'GeoIP2-API/' . Client::VERSION
                             . ' MaxMind-WS-API/' . WsClient::VERSION
                             . ' PHP/' . \PHP_VERSION
                             . ' curl/' . $curlVersion['version'],
@@ -542,7 +566,7 @@ class ClientTest extends TestCase
 
         $method = strtolower($service);
 
-        $client = new \GeoIp2\WebService\Client(
+        $client = new Client(
             $accountId,
             $licenseKey,
             $locales,
